@@ -1,11 +1,12 @@
-from flask import Flask, render_template, request
+from flask import Flask, render_template, request, redirect, url_for, session
 from flask_socketio import SocketIO, send
 from pymongo import MongoClient
 from datetime import datetime
+import secrets
 import time
 
 app = Flask(__name__)
-# TODO: secret-key
+app.config['SECRET_KEY'] = secrets.token_hex(16)
 socketio = SocketIO(app)
 
 # Connect to MongoDB
@@ -14,27 +15,39 @@ db = client['chat_db']
 messages_collection = db['messages']
 
 
-@app.route('/')
-def index():
-    # Load the last 30 messages from the database
-    messages = messages_collection.find().sort('timestamp', -1).limit(30)
+@app.route('/', methods=['GET', 'POST'])
+def login():
+    if request.method == 'POST':
+        session['username'] = request.form['username']
+        return redirect(url_for('chat'))
+    return render_template('login.html')
+
+
+@app.route('/chat')
+def chat():
+    if 'username' not in session:
+        return redirect(url_for('login'))
+
+    # Load the last 50 messages from the database
+    messages = messages_collection.find().sort('timestamp', -1).limit(50)
     messages = reversed(list(messages))  # Reverse to show the latest at the bottom
-    return render_template('index.html', messages=messages)
+    return render_template('chat.html', messages=messages, username=session['username'])
 
 
 @socketio.on('message')
 def handleMessage(msg):
+    username = session.get('username', 'Anonymous') # defaults to Anonymous if none defined
 
     # Save the message to MongoDB
     message_data = {
-        'username': request.remote_addr,  # I will be using usernames here
+        'username': username,
         'message': msg,
-        'timestamp': datetime.fromtimestamp(time.time())
+        'timestamp': datetime.utcnow()
     }
     messages_collection.insert_one(message_data)
 
     # Broadcast the message to all clients
-    send(msg, broadcast=True)
+    send(f'{username}: {msg}', broadcast=True)
 
 
 if __name__ == '__main__':
